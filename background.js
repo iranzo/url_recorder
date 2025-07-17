@@ -2,9 +2,52 @@
 // This script runs in the background and handles URL recording and storage.
 
 let DEBUG_MODE = false; // Global flag for debugging
+let cachedRecordedUrls = []; // Global in-memory cache for recorded URLs
+let cachedTargetPatterns = []; // Global in-memory cache for target patterns
 
-// Initialize storage with an empty array for recorded URLs and no target patterns.
+/**
+ * Initializes the in-memory caches from chrome.storage.local.
+ * This function runs immediately when the service worker script loads.
+ */
+async function initializeCaches() {
+  const result = await chrome.storage.local.get([
+    "targetPatterns",
+    "recordedUrls",
+    "isDebugMode",
+  ]);
+
+  // Initialize targetPatterns
+  cachedTargetPatterns = result.targetPatterns || [];
+  if (DEBUG_MODE)
+    console.log(
+      "Background: Loaded initial cachedTargetPatterns from storage:",
+      cachedTargetPatterns,
+    );
+
+  // Initialize recordedUrls
+  cachedRecordedUrls = result.recordedUrls || [];
+  if (DEBUG_MODE)
+    console.log(
+      "Background: Loaded initial cachedRecordedUrls from storage:",
+      cachedRecordedUrls,
+    );
+
+  // Initialize debugMode
+  DEBUG_MODE = result.isDebugMode || false; // Default to false
+  if (DEBUG_MODE)
+    console.log(
+      "Background: Loaded initial DEBUG_MODE from storage:",
+      DEBUG_MODE,
+    );
+
+  updateBadgeCount(); // Update badge after caches are loaded
+}
+
+// Call initializeCaches immediately when the service worker script starts
+initializeCaches();
+
 // This listener runs only once when the extension is installed or updated.
+// It ensures default values are set if storage is completely empty (first install).
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(
     ["targetPatterns", "recordedUrls", "isDebugMode"],
@@ -12,36 +55,66 @@ chrome.runtime.onInstalled.addListener(() => {
       if (result.targetPatterns === undefined) {
         chrome.storage.local.set({ targetPatterns: [] });
         if (DEBUG_MODE)
-          console.log("Background: Initialized targetPatterns to empty array.");
+          console.log(
+            "Background: onInstalled: Initialized targetPatterns to empty array in storage.",
+          );
       }
       if (result.recordedUrls === undefined) {
         chrome.storage.local.set({ recordedUrls: [] });
         if (DEBUG_MODE)
-          console.log("Background: Initialized recordedUrls to empty array.");
+          console.log(
+            "Background: onInstalled: Initialized recordedUrls to empty array in storage.",
+          );
       }
       if (result.isDebugMode === undefined) {
         chrome.storage.local.set({ isDebugMode: false }); // Default to false
         if (DEBUG_MODE)
-          console.log("Background: Initialized isDebugMode to false.");
-      } else {
-        DEBUG_MODE = result.isDebugMode; // Set initial DEBUG_MODE from storage
-        if (DEBUG_MODE)
           console.log(
-            "Background: Loaded initial DEBUG_MODE from storage:",
-            DEBUG_MODE,
+            "Background: onInstalled: Initialized isDebugMode to false in storage.",
           );
       }
+      // Caches are already initialized by the direct call to initializeCaches()
+      // and will be kept in sync by storage.onChanged.
     },
   );
 });
 
-// Listen for changes in chrome.storage.local, specifically for 'isDebugMode'
+// Listen for changes in chrome.storage.local to keep caches in sync
 chrome.storage.onChanged.addListener((changes, namespace) => {
-  if (namespace === "local" && changes.isDebugMode !== undefined) {
-    DEBUG_MODE = changes.isDebugMode.newValue;
-    console.log(`Background: DEBUG_MODE updated to: ${DEBUG_MODE}`); // This log always shows
+  if (namespace === "local") {
+    if (changes.isDebugMode !== undefined) {
+      DEBUG_MODE = changes.isDebugMode.newValue;
+      console.log(`Background: DEBUG_MODE updated to: ${DEBUG_MODE}`); // This log always shows
+    }
+    if (changes.recordedUrls !== undefined) {
+      cachedRecordedUrls = changes.recordedUrls.newValue || [];
+      if (DEBUG_MODE)
+        console.log(
+          `Background: cachedRecordedUrls updated via storage.onChanged. New count: ${cachedRecordedUrls.length}`,
+        );
+      updateBadgeCount(); // Update badge when recordedUrls change from any source
+    }
+    if (changes.targetPatterns !== undefined) {
+      cachedTargetPatterns = changes.targetPatterns.newValue || [];
+      if (DEBUG_MODE)
+        console.log(
+          `Background: cachedTargetPatterns updated via storage.onChanged. New count: ${cachedTargetPatterns.length}`,
+        );
+    }
   }
 });
+
+/**
+ * Updates the extension badge with the current count of recorded URLs.
+ */
+function updateBadgeCount() {
+  // Use the in-memory cache for the count
+  const count = cachedRecordedUrls.length;
+  chrome.action.setBadgeText({ text: count.toString() });
+  chrome.action.setBadgeBackgroundColor({ color: "#4c51bf" }); // Indigo color
+  if (DEBUG_MODE)
+    console.log(`Background: Attempted to set badge count to: ${count}`);
+}
 
 /**
  * Checks if a given URL matches any of the stored regex patterns.
@@ -84,38 +157,53 @@ function matchesAnyPattern(url, patterns) {
 
 /**
  * Adds a URL to storage if it matches the target patterns and is not already present.
+ * This function now operates on the global cachedRecordedUrls array.
  * @param {string} url - The URL to add.
  */
 function addUrlToStorage(url) {
-  chrome.storage.local.get(["targetPatterns", "recordedUrls"], (result) => {
-    const targetPatterns = result.targetPatterns || [];
-    let recordedUrls = result.recordedUrls || [];
+  // Use the in-memory cache directly
+  const targetPatterns = cachedTargetPatterns;
+  let currentRecordedUrls = cachedRecordedUrls; // Reference to the global cache
 
-    if (DEBUG_MODE) {
-      console.log(`addUrlToStorage: Checking URL: "${url}"`);
-      console.log(`addUrlToStorage: Current active patterns:`, targetPatterns);
-    }
+  if (DEBUG_MODE) {
+    console.log(`addUrlToStorage: Checking URL: "${url}"`);
+    console.log(`addUrlToStorage: Current active patterns:`, targetPatterns);
+  }
 
-    if (matchesAnyPattern(url, targetPatterns)) {
-      if (!recordedUrls.includes(url)) {
-        recordedUrls.push(url);
-        chrome.storage.local.set({ recordedUrls: recordedUrls }, () => {
-          if (DEBUG_MODE)
-            console.log(
-              `addUrlToStorage: Successfully recorded URL: "${url}". Total URLs: ${recordedUrls.length}`,
-            );
-        });
-      } else {
+  if (matchesAnyPattern(url, targetPatterns)) {
+    if (DEBUG_MODE)
+      console.log(
+        `addUrlToStorage: Before deduplication check, cachedRecordedUrls has ${currentRecordedUrls.length} items.`,
+      );
+    if (DEBUG_MODE)
+      console.log(
+        `addUrlToStorage: Is "${url}" already in cachedRecordedUrls? ${currentRecordedUrls.includes(
+          url,
+        )}`,
+      );
+
+    if (!currentRecordedUrls.includes(url)) {
+      currentRecordedUrls.push(url); // Add to the in-memory cache
+      chrome.storage.local.set({ recordedUrls: currentRecordedUrls }, () => {
+        // Save the updated cache to storage
         if (DEBUG_MODE)
-          console.log(`addUrlToStorage: URL "${url}" is already recorded.`);
-      }
+          console.log(
+            `addUrlToStorage: Successfully recorded URL: "${url}". New total URLs: ${currentRecordedUrls.length}`,
+          );
+        // updateBadgeCount() is now called by storage.onChanged listener for recordedUrls
+      });
     } else {
       if (DEBUG_MODE)
         console.log(
-          `addUrlToStorage: URL "${url}" did not match any active pattern, not recording.`,
+          `addUrlToStorage: URL "${url}" is already recorded, skipping.`,
         );
     }
-  });
+  } else {
+    if (DEBUG_MODE)
+      console.log(
+        `addUrlToStorage: URL "${url}" did not match any active pattern, not recording.`,
+      );
+  }
 }
 
 /**
@@ -148,25 +236,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       ? request.patterns.filter((p) => typeof p === "string" && p.trim() !== "")
       : [];
     chrome.storage.local.set({ targetPatterns: newTargetPatterns }, () => {
+      // cachedTargetPatterns will be updated by storage.onChanged listener
       if (DEBUG_MODE)
         console.log(`Background: Set new target patterns:`, newTargetPatterns);
       sendResponse({ success: true, patterns: newTargetPatterns });
     });
     return true;
   } else if (request.action === "getRecordedUrls") {
-    chrome.storage.local.get(["targetPatterns", "recordedUrls"], (result) => {
-      const targetPatterns = result.targetPatterns || [];
-      const recordedUrls = result.recordedUrls || [];
-      if (DEBUG_MODE)
-        console.log(
-          `Background: Sending recorded URLs (${recordedUrls.length}) and patterns (${targetPatterns.length}) to popup.`,
-        );
-      sendResponse({ urls: recordedUrls, targetPatterns: targetPatterns });
+    // Respond with the cached data
+    if (DEBUG_MODE)
+      console.log(
+        `Background: Sending recorded URLs (${cachedRecordedUrls.length}) and patterns (${cachedTargetPatterns.length}) to popup.`,
+      );
+    sendResponse({
+      urls: cachedRecordedUrls,
+      targetPatterns: cachedTargetPatterns,
     });
     return true;
   } else if (request.action === "clearRecordedUrls") {
     chrome.storage.local.set({ recordedUrls: [] }, () => {
+      // cachedRecordedUrls will be updated by storage.onChanged listener
       if (DEBUG_MODE) console.log("Background: All recorded URLs cleared.");
+      // updateBadgeCount() is now called by storage.onChanged listener for recordedUrls
       sendResponse({ success: true });
     });
     return true;

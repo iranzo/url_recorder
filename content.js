@@ -32,7 +32,13 @@ function extractUrlsFromNode(node) {
 
   // Helper function to process elements with a given selector and attribute
   const processElements = (selector, attribute, rootNode = node) => {
-    // Use querySelectorAll on the provided rootNode to find elements within it
+    // querySelectorAll works on Element nodes, so ensure rootNode is an Element
+    if (
+      rootNode.nodeType !== Node.ELEMENT_NODE &&
+      rootNode.nodeType !== Node.DOCUMENT_NODE
+    ) {
+      return; // Cannot query on non-element/document nodes
+    }
     rootNode.querySelectorAll(selector).forEach((element) => {
       const urlString = element.getAttribute(attribute);
       if (urlString) {
@@ -64,9 +70,21 @@ function extractUrlsFromNode(node) {
     if (node.hasAttribute("action")) processElements("", "action", node); // For <form>
     if (node.hasAttribute("style")) extractUrlsFromStyle(node); // For inline styles on the node itself
     if (node.hasAttribute("onclick")) extractUrlsFromOnclick(node); // For onclick on the node itself
+    if (node.hasAttribute("srcset")) processElements("", "srcset", node); // For image srcset
+    if (node.hasAttribute("poster")) processElements("", "poster", node); // For video poster
 
     // Check data-* attributes on the node itself
-    const dataAttributes = ["data-url", "data-href", "data-link"];
+    const dataAttributes = [
+      "data-url",
+      "data-href",
+      "data-link",
+      "data-src",
+      "data-image",
+      "data-background",
+      "data-original",
+      "data-original-src",
+      "data-original-href",
+    ]; // Expanded data attributes
     dataAttributes.forEach((attr) => {
       if (node.hasAttribute(attr)) {
         const urlString = node.getAttribute(attr);
@@ -98,17 +116,29 @@ function extractUrlsFromNode(node) {
   processElements("script[src]", "src");
   processElements("iframe[src]", "src");
   processElements("form[action]", "action"); // Form actions
+  processElements("img[srcset]", "srcset"); // Responsive image sources
+  processElements("source[srcset]", "srcset"); // Responsive image sources for <picture>
+  processElements("video[poster]", "poster"); // Video poster images
+  processElements("audio[src]", "src"); // New: Audio sources
+  processElements("track[src]", "src"); // New: Track sources for video/audio
+  processElements("object[data]", "data"); // New: Object data
+  processElements("embed[src]", "src"); // New: Embed sources
 
   // 2. Extract URLs from inline styles (e.g., background-image: url(...))
   const extractUrlsFromStyle = (element) => {
     const style = element.getAttribute("style");
     if (style) {
-      const urlMatches = style.match(/url\(['"]?(.*?)['"]?\)/g);
+      // Updated regex to be more robust for various URL formats in CSS
+      const urlMatches = style.match(/url\(['"]?(.*?)(?:['"]?\))?/g);
       if (urlMatches) {
         urlMatches.forEach((match) => {
-          const urlString = match
+          // Clean up the matched string to get the raw URL
+          let urlString = match
             .replace(/url\(['"]?/, "")
             .replace(/['"]?\)/, "");
+          // Remove any trailing quotes if present (e.g., from url("foo"))
+          urlString = urlString.replace(/['"]$/, "");
+
           try {
             const url = new URL(urlString, document.baseURI).href;
             foundUrls.add(url);
@@ -128,29 +158,50 @@ function extractUrlsFromNode(node) {
       }
     }
   };
-  node.querySelectorAll("[style]").forEach(extractUrlsFromStyle); // Check children for inline styles
+  // Check the node itself if it's an element, and its children for inline styles
+  if (node.nodeType === Node.ELEMENT_NODE) extractUrlsFromStyle(node);
+  node.querySelectorAll("[style]").forEach(extractUrlsFromStyle);
 
   // 3. Extract URLs from data-* attributes (e.g., data-url, data-href, data-link)
-  const dataAttributes = ["data-url", "data-href", "data-link"];
+  const dataAttributes = [
+    "data-url",
+    "data-href",
+    "data-link",
+    "data-src",
+    "data-image",
+    "data-background",
+    "data-original",
+    "data-original-src",
+    "data-original-href", // Common variations
+    "data-video-src",
+    "data-poster",
+    "data-thumbnail", // More specific media attributes
+  ];
   dataAttributes.forEach((attr) => {
-    node.querySelectorAll(`[${attr}]`).forEach((element) => {
-      const urlString = element.getAttribute(attr);
-      if (urlString) {
-        try {
-          const url = new URL(urlString, document.baseURI).href;
-          foundUrls.add(url);
-          if (DEBUG_MODE)
-            console.log(`Content Script: Found URL from ${attr}: ${url}`);
-        } catch (e) {
-          if (DEBUG_MODE)
-            console.error(
-              `Content Script: Invalid URL in ${attr}:`,
-              urlString,
-              e,
-            );
+    // querySelectorAll works on Element nodes, so ensure node is an Element
+    if (
+      node.nodeType === Node.ELEMENT_NODE ||
+      node.nodeType === Node.DOCUMENT_NODE
+    ) {
+      node.querySelectorAll(`[${attr}]`).forEach((element) => {
+        const urlString = element.getAttribute(attr);
+        if (urlString) {
+          try {
+            const url = new URL(urlString, document.baseURI).href;
+            foundUrls.add(url);
+            if (DEBUG_MODE)
+              console.log(`Content Script: Found URL from ${attr}: ${url}`);
+          } catch (e) {
+            if (DEBUG_MODE)
+              console.error(
+                `Content Script: Invalid URL in ${attr}:`,
+                urlString,
+                e,
+              );
+          }
         }
-      }
-    });
+      });
+    }
   });
 
   // 4. Extract URLs from onclick attributes (simple cases)
@@ -158,9 +209,10 @@ function extractUrlsFromNode(node) {
   const extractUrlsFromOnclick = (element) => {
     const onclickAttr = element.getAttribute("onclick");
     if (onclickAttr) {
-      // Regex to find patterns like window.location.href = 'url' or window.open('url')
+      // Regex to find patterns like window.location.href = 'url', window.open('url'), or direct 'url' in simple cases
+      // Added support for single quotes, double quotes, and no quotes (though latter is less common for full URLs)
       const urlRegex =
-        /(?:window\.location\.href\s*=\s*|window\.open\s*\()\s*['"](https?:\/\/[^'"]+)['"]/gi;
+        /(?:window\.location(?:\.href)?\s*=\s*|window\.open\s*\()\s*['"]?(https?:\/\/[^'"]+)['"]?/gi;
       let match;
       while ((match = urlRegex.exec(onclickAttr)) !== null) {
         const urlString = match[1];
@@ -180,6 +232,8 @@ function extractUrlsFromNode(node) {
       }
     }
   };
+  // Check the node itself if it's an element, and its children for onclick attributes
+  if (node.nodeType === Node.ELEMENT_NODE) extractUrlsFromOnclick(node);
   node.querySelectorAll("[onclick]").forEach(extractUrlsFromOnclick);
 
   return Array.from(foundUrls);
@@ -222,18 +276,31 @@ const observer = new MutationObserver((mutations) => {
       });
     }
     // Also check attribute changes on existing elements if they might contain URLs
+    const attributesToObserve = [
+      "src",
+      "href",
+      "action",
+      "style",
+      "onclick",
+      "srcset",
+      "poster",
+      "data", // 'data' for <object>
+      "data-url",
+      "data-href",
+      "data-link",
+      "data-src",
+      "data-image",
+      "data-background",
+      "data-original",
+      "data-original-src",
+      "data-original-href",
+      "data-video-src",
+      "data-poster",
+      "data-thumbnail",
+    ];
     if (
       mutation.type === "attributes" &&
-      [
-        "src",
-        "href",
-        "action",
-        "style",
-        "onclick",
-        "data-url",
-        "data-href",
-        "data-link",
-      ].includes(mutation.attributeName) &&
+      attributesToObserve.includes(mutation.attributeName) &&
       mutation.target.nodeType === Node.ELEMENT_NODE
     ) {
       extractUrlsFromNode(mutation.target).forEach((url) =>
