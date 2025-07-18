@@ -1,6 +1,6 @@
 // content.js
 // This script runs in the context of the webpage and extracts URLs,
-// now including dynamically loaded content and more interactive elements, with optimizations.
+// now including dynamically loaded content, interactive elements, and text content, with optimizations.
 
 let DEBUG_MODE = false; // Global flag for debugging in content script
 let urlsToProcess = new Set(); // Temporary set to collect URLs before sending
@@ -23,6 +23,130 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 });
 
 /**
+ * Extracts URLs from inline styles (e.g., background-image: url(...))
+ * @param {HTMLElement} element - The HTML element to check for inline styles.
+ * @param {Set<string>} urlSet - The set to add found URLs to.
+ */
+const extractUrlsFromStyle = (element, urlSet) => {
+  const style = element.getAttribute("style");
+  if (style) {
+    const urlMatches = style.match(/url\(['"]?(.*?)(?:['"]?\))?/g);
+    if (urlMatches) {
+      urlMatches.forEach((match) => {
+        let urlString = match.replace(/url\(['"]?/, "").replace(/['"]?\)/, "");
+        urlString = urlString.replace(/['"]$/, ""); // Remove any trailing quotes
+        try {
+          const url = new URL(urlString, document.baseURI).href;
+          urlSet.add(url);
+          if (DEBUG_MODE)
+            console.log(`Content Script: Found URL from inline style: ${url}`);
+        } catch (e) {
+          if (DEBUG_MODE)
+            console.error(
+              "Content Script: Invalid URL in style attribute:",
+              urlString,
+              e,
+            );
+        }
+      });
+    }
+  }
+};
+
+/**
+ * Extracts URLs from onclick attributes (simple cases)
+ * @param {HTMLElement} element - The HTML element to check for onclick attribute.
+ * @param {Set<string>} urlSet - The set to add found URLs to.
+ */
+const extractUrlsFromOnclick = (element, urlSet) => {
+  const onclickAttr = element.getAttribute("onclick");
+  if (onclickAttr) {
+    const urlRegex =
+      /(?:window\.location(?:\.href)?\s*=\s*|window\.open\s*\()\s*['"]?(https?:\/\/[^'"]+)['"]?/gi;
+    let match;
+    while ((match = urlRegex.exec(onclickAttr)) !== null) {
+      const urlString = match[1];
+      try {
+        const url = new URL(urlString, document.baseURI).href;
+        urlSet.add(url);
+        if (DEBUG_MODE)
+          console.log(`Content Script: Found URL from onclick: ${url}`);
+      } catch (e) {
+        if (DEBUG_MODE)
+          console.error(
+            "Content Script: Invalid URL in onclick attribute:",
+            urlString,
+            e,
+          );
+      }
+    }
+  }
+};
+
+/**
+ * Extracts URLs from the text content of <script> tags.
+ * @param {HTMLScriptElement} scriptElement - The script element to extract URLs from.
+ * @param {Set<string>} urlSet - The set to add found URLs to.
+ */
+function extractUrlsFromScriptContent(scriptElement, urlSet) {
+  if (scriptElement.textContent) {
+    const scriptUrlRegex = /(https?:\/\/[^\s"',`{}()\[\]]+)/gi;
+    let match;
+    while ((match = scriptUrlRegex.exec(scriptElement.textContent)) !== null) {
+      const urlString = match[1];
+      try {
+        const url = new URL(urlString, document.baseURI).href;
+        urlSet.add(url);
+        if (DEBUG_MODE)
+          console.log(`Content Script: Found URL from script content: ${url}`);
+      } catch (e) {
+        if (DEBUG_MODE)
+          console.error(
+            "Content Script: Invalid URL in script content:",
+            urlString,
+            e,
+          );
+      }
+    }
+  }
+}
+
+/**
+ * Extracts URLs from general text content (e.g., within <div>, <span>).
+ * @param {string} text - The text content to search for URLs.
+ * @param {Set<string>} urlSet - The set to add found URLs to.
+ * @param {string} sourceDescription - A description of the text source for logging.
+ */
+function extractUrlsFromTextContent(
+  text,
+  urlSet,
+  sourceDescription = "text content",
+) {
+  if (!text) return;
+  const generalUrlRegex =
+    /(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/[a-zA-Z0-9]+\.[^\s]{2,}|[a-zA-Z0-9]+\.[^\s]{2,})/gi;
+  let match;
+  while ((match = generalUrlRegex.exec(text)) !== null) {
+    const urlString = match[0];
+    try {
+      const url = new URL(urlString, document.baseURI).href;
+      urlSet.add(url);
+      if (DEBUG_MODE)
+        console.log(
+          `Content Script: Found URL from ${sourceDescription}: ${url}`,
+        );
+    } catch (e) {
+      if (DEBUG_MODE)
+        console.error(
+          `Content Script: Invalid URL in ${sourceDescription}:`,
+          urlString,
+          e,
+        );
+    }
+  }
+}
+
+/**
  * Extracts all unique URLs from various HTML elements and attributes within a given node.
  * @param {Node} node - The DOM node to search within (e.g., document or a newly added element).
  * @returns {string[]} An array of unique URLs found.
@@ -32,18 +156,16 @@ function extractUrlsFromNode(node) {
 
   // Helper function to process elements with a given selector and attribute
   const processElements = (selector, attribute, rootNode = node) => {
-    // querySelectorAll works on Element nodes, so ensure rootNode is an Element
     if (
       rootNode.nodeType !== Node.ELEMENT_NODE &&
       rootNode.nodeType !== Node.DOCUMENT_NODE
     ) {
-      return; // Cannot query on non-element/document nodes
+      return;
     }
     rootNode.querySelectorAll(selector).forEach((element) => {
       const urlString = element.getAttribute(attribute);
       if (urlString) {
         try {
-          // Resolve relative URLs against the document's base URI
           const url = new URL(urlString, document.baseURI).href;
           foundUrls.add(url);
           if (DEBUG_MODE)
@@ -62,16 +184,45 @@ function extractUrlsFromNode(node) {
     });
   };
 
-  // If the node itself is an element, check its attributes too
+  // If the node itself is an element, check its attributes and text content
   if (node.nodeType === Node.ELEMENT_NODE) {
     // Check the node itself for direct attributes
-    if (node.hasAttribute("href")) processElements("", "href", node); // For <a> or <link>
-    if (node.hasAttribute("src")) processElements("", "src", node); // For <img>, <script>, <iframe>
-    if (node.hasAttribute("action")) processElements("", "action", node); // For <form>
-    if (node.hasAttribute("style")) extractUrlsFromStyle(node); // For inline styles on the node itself
-    if (node.hasAttribute("onclick")) extractUrlsFromOnclick(node); // For onclick on the node itself
-    if (node.hasAttribute("srcset")) processElements("", "srcset", node); // For image srcset
-    if (node.hasAttribute("poster")) processElements("", "poster", node); // For video poster
+    const attributesToCheck = [
+      "href",
+      "src",
+      "action",
+      "srcset",
+      "poster",
+      "data",
+    ];
+    attributesToCheck.forEach((attr) => {
+      if (node.hasAttribute(attr)) {
+        const urlString = node.getAttribute(attr);
+        if (urlString) {
+          try {
+            const url = new URL(urlString, document.baseURI).href;
+            foundUrls.add(url);
+            if (DEBUG_MODE)
+              console.log(
+                `Content Script: Found URL from direct attribute ${attr} on element: ${url}`,
+              );
+          } catch (e) {
+            if (DEBUG_MODE)
+              console.error(
+                `Content Script: Invalid URL in direct attribute ${attr} on element:`,
+                urlString,
+                e,
+              );
+          }
+        }
+      }
+    });
+
+    extractUrlsFromStyle(node, foundUrls);
+    extractUrlsFromOnclick(node, foundUrls);
+
+    if (node.tagName === "SCRIPT" && node.textContent)
+      extractUrlsFromScriptContent(node, foundUrls);
 
     // Check data-* attributes on the node itself
     const dataAttributes = [
@@ -84,7 +235,16 @@ function extractUrlsFromNode(node) {
       "data-original",
       "data-original-src",
       "data-original-href",
-    ]; // Expanded data attributes
+      "data-video-src",
+      "data-poster",
+      "data-thumbnail",
+      "data-item-url",
+      "data-product-url",
+      "data-asset-url",
+      "data-api-url",
+      "data-redirect-url",
+      "data-target-url",
+    ];
     dataAttributes.forEach((attr) => {
       if (node.hasAttribute(attr)) {
         const urlString = node.getAttribute(attr);
@@ -107,6 +267,12 @@ function extractUrlsFromNode(node) {
         }
       }
     });
+
+    extractUrlsFromTextContent(
+      node.textContent,
+      foundUrls,
+      `element textContent (${node.tagName})`,
+    );
   }
 
   // 1. Extract URLs from common link/resource elements (within the node's subtree)
@@ -115,55 +281,27 @@ function extractUrlsFromNode(node) {
   processElements("link[href]", "href");
   processElements("script[src]", "src");
   processElements("iframe[src]", "src");
-  processElements("form[action]", "action"); // Form actions
-  processElements("img[srcset]", "srcset"); // Responsive image sources
-  processElements("source[srcset]", "srcset"); // Responsive image sources for <picture>
-  processElements("video[poster]", "poster"); // Video poster images
-  processElements("audio[src]", "src"); // New: Audio sources
-  processElements("track[src]", "src"); // New: Track sources for video/audio
-  processElements("object[data]", "data"); // New: Object data
-  processElements("embed[src]", "src"); // New: Embed sources
+  processElements("form[action]", "action");
+  processElements("img[srcset]", "srcset");
+  processElements("source[srcset]", "srcset");
+  processElements("video[poster]", "poster");
+  processElements("audio[src]", "src");
+  processElements("track[src]", "src");
+  processElements("object[data]", "data");
+  processElements("embed[src]", "src");
+  node
+    .querySelectorAll("script")
+    .forEach((scriptElement) =>
+      extractUrlsFromScriptContent(scriptElement, foundUrls),
+    );
 
-  // 2. Extract URLs from inline styles (e.g., background-image: url(...))
-  const extractUrlsFromStyle = (element) => {
-    const style = element.getAttribute("style");
-    if (style) {
-      // Updated regex to be more robust for various URL formats in CSS
-      const urlMatches = style.match(/url\(['"]?(.*?)(?:['"]?\))?/g);
-      if (urlMatches) {
-        urlMatches.forEach((match) => {
-          // Clean up the matched string to get the raw URL
-          let urlString = match
-            .replace(/url\(['"]?/, "")
-            .replace(/['"]?\)/, "");
-          // Remove any trailing quotes if present (e.g., from url("foo"))
-          urlString = urlString.replace(/['"]$/, "");
+  // 2. Extract URLs from inline styles (within the node's subtree)
+  node
+    .querySelectorAll("[style]")
+    .forEach((element) => extractUrlsFromStyle(element, foundUrls));
 
-          try {
-            const url = new URL(urlString, document.baseURI).href;
-            foundUrls.add(url);
-            if (DEBUG_MODE)
-              console.log(
-                `Content Script: Found URL from inline style: ${url}`,
-              );
-          } catch (e) {
-            if (DEBUG_MODE)
-              console.error(
-                "Content Script: Invalid URL in style attribute:",
-                urlString,
-                e,
-              );
-          }
-        });
-      }
-    }
-  };
-  // Check the node itself if it's an element, and its children for inline styles
-  if (node.nodeType === Node.ELEMENT_NODE) extractUrlsFromStyle(node);
-  node.querySelectorAll("[style]").forEach(extractUrlsFromStyle);
-
-  // 3. Extract URLs from data-* attributes (e.g., data-url, data-href, data-link)
-  const dataAttributes = [
+  // 3. Extract URLs from data-* attributes (within the node's subtree)
+  const dataAttributesAll = [
     "data-url",
     "data-href",
     "data-link",
@@ -172,13 +310,18 @@ function extractUrlsFromNode(node) {
     "data-background",
     "data-original",
     "data-original-src",
-    "data-original-href", // Common variations
+    "data-original-href",
     "data-video-src",
     "data-poster",
-    "data-thumbnail", // More specific media attributes
+    "data-thumbnail",
+    "data-item-url",
+    "data-product-url",
+    "data-asset-url",
+    "data-api-url",
+    "data-redirect-url",
+    "data-target-url",
   ];
-  dataAttributes.forEach((attr) => {
-    // querySelectorAll works on Element nodes, so ensure node is an Element
+  dataAttributesAll.forEach((attr) => {
     if (
       node.nodeType === Node.ELEMENT_NODE ||
       node.nodeType === Node.DOCUMENT_NODE
@@ -204,37 +347,26 @@ function extractUrlsFromNode(node) {
     }
   });
 
-  // 4. Extract URLs from onclick attributes (simple cases)
-  // This is a best-effort attempt for direct URL assignments.
-  const extractUrlsFromOnclick = (element) => {
-    const onclickAttr = element.getAttribute("onclick");
-    if (onclickAttr) {
-      // Regex to find patterns like window.location.href = 'url', window.open('url'), or direct 'url' in simple cases
-      // Added support for single quotes, double quotes, and no quotes (though latter is less common for full URLs)
-      const urlRegex =
-        /(?:window\.location(?:\.href)?\s*=\s*|window\.open\s*\()\s*['"]?(https?:\/\/[^'"]+)['"]?/gi;
-      let match;
-      while ((match = urlRegex.exec(onclickAttr)) !== null) {
-        const urlString = match[1];
-        try {
-          const url = new URL(urlString, document.baseURI).href;
-          foundUrls.add(url);
-          if (DEBUG_MODE)
-            console.log(`Content Script: Found URL from onclick: ${url}`);
-        } catch (e) {
-          if (DEBUG_MODE)
-            console.error(
-              "Content Script: Invalid URL in onclick attribute:",
-              urlString,
-              e,
-            );
-        }
+  // 4. Extract URLs from onclick attributes (within the node's subtree)
+  node
+    .querySelectorAll("[onclick]")
+    .forEach((element) => extractUrlsFromOnclick(element, foundUrls));
+
+  // 6. Apply general text content scanning to all descendant text nodes
+  node.querySelectorAll("*").forEach((element) => {
+    element.childNodes.forEach((child) => {
+      if (
+        child.nodeType === Node.TEXT_NODE &&
+        child.textContent.trim().length > 0
+      ) {
+        extractUrlsFromTextContent(
+          child.textContent,
+          foundUrls,
+          `descendant text node of ${element.tagName}`,
+        );
       }
-    }
-  };
-  // Check the node itself if it's an element, and its children for onclick attributes
-  if (node.nodeType === Node.ELEMENT_NODE) extractUrlsFromOnclick(node);
-  node.querySelectorAll("[onclick]").forEach(extractUrlsFromOnclick);
+    });
+  });
 
   return Array.from(foundUrls);
 }
@@ -269,9 +401,18 @@ const observer = new MutationObserver((mutations) => {
   mutations.forEach((mutation) => {
     if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
       mutation.addedNodes.forEach((node) => {
-        // Only process element nodes (not text nodes, comments, etc.)
+        // Process element nodes and text nodes directly added
         if (node.nodeType === Node.ELEMENT_NODE) {
           extractUrlsFromNode(node).forEach((url) => urlsToProcess.add(url));
+        } else if (
+          node.nodeType === Node.TEXT_NODE &&
+          node.textContent.trim().length > 0
+        ) {
+          extractUrlsFromTextContent(
+            node.textContent,
+            urlsToProcess,
+            `added text node`,
+          );
         }
       });
     }
@@ -284,7 +425,7 @@ const observer = new MutationObserver((mutations) => {
       "onclick",
       "srcset",
       "poster",
-      "data", // 'data' for <object>
+      "data",
       "data-url",
       "data-href",
       "data-link",
@@ -297,6 +438,12 @@ const observer = new MutationObserver((mutations) => {
       "data-video-src",
       "data-poster",
       "data-thumbnail",
+      "data-item-url",
+      "data-product-url",
+      "data-asset-url",
+      "data-api-url",
+      "data-redirect-url",
+      "data-target-url",
     ];
     if (
       mutation.type === "attributes" &&
@@ -307,6 +454,18 @@ const observer = new MutationObserver((mutations) => {
         urlsToProcess.add(url),
       );
     }
+    // Observe character data changes (for text nodes)
+    if (
+      mutation.type === "characterData" &&
+      mutation.target.nodeType === Node.TEXT_NODE &&
+      mutation.target.textContent.trim().length > 0
+    ) {
+      extractUrlsFromTextContent(
+        mutation.target.textContent,
+        urlsToProcess,
+        `characterData change`,
+      );
+    }
   });
 
   // Trigger debounced send after processing all mutations in the current batch
@@ -314,11 +473,9 @@ const observer = new MutationObserver((mutations) => {
 });
 
 // Start observing the document body for changes
-// subtree: true means it will observe changes in all descendants of the target node
-// childList: true means it will observe additions/removals of child nodes
-// attributes: true means it will observe changes to attributes (e.g., src, href, onclick, data-url)
 observer.observe(document.body, {
   childList: true,
   subtree: true,
   attributes: true,
+  characterData: true,
 });
