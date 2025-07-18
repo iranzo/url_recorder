@@ -28,4 +28,4 @@ If we ever update this policy, the changes will be reflected here, with the "Eff
 
 ## 6. Contact
 
-If you have any questions, feel free to contact us at: [your email address].
+If you have any questions, feel free to contact by raising an issue.
