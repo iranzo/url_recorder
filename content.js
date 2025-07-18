@@ -27,7 +27,8 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
  * @param {HTMLElement} element - The HTML element to check for inline styles.
  * @param {Set<string>} urlSet - The set to add found URLs to.
  */
-const extractUrlsFromStyle = (element, urlSet) => {
+function extractUrlsFromStyle(element, urlSet) {
+  // Changed to function declaration for hoisting
   const style = element.getAttribute("style");
   if (style) {
     const urlMatches = style.match(/url\(['"]?(.*?)(?:['"]?\))?/g);
@@ -41,6 +42,7 @@ const extractUrlsFromStyle = (element, urlSet) => {
           if (DEBUG_MODE)
             console.log(`Content Script: Found URL from inline style: ${url}`);
         } catch (e) {
+          // Invalid URL string inside style, ignore or log if debug
           if (DEBUG_MODE)
             console.error(
               "Content Script: Invalid URL in style attribute:",
@@ -51,14 +53,15 @@ const extractUrlsFromStyle = (element, urlSet) => {
       });
     }
   }
-};
+}
 
 /**
  * Extracts URLs from onclick attributes (simple cases)
  * @param {HTMLElement} element - The HTML element to check for onclick attribute.
  * @param {Set<string>} urlSet - The set to add found URLs to.
  */
-const extractUrlsFromOnclick = (element, urlSet) => {
+function extractUrlsFromOnclick(element, urlSet) {
+  // Changed to function declaration for hoisting
   const onclickAttr = element.getAttribute("onclick");
   if (onclickAttr) {
     const urlRegex =
@@ -72,6 +75,7 @@ const extractUrlsFromOnclick = (element, urlSet) => {
         if (DEBUG_MODE)
           console.log(`Content Script: Found URL from onclick: ${url}`);
       } catch (e) {
+        // Invalid URL string inside onclick, ignore or log if debug
         if (DEBUG_MODE)
           console.error(
             "Content Script: Invalid URL in onclick attribute:",
@@ -81,7 +85,7 @@ const extractUrlsFromOnclick = (element, urlSet) => {
       }
     }
   }
-};
+}
 
 /**
  * Extracts URLs from the text content of <script> tags.
@@ -89,8 +93,11 @@ const extractUrlsFromOnclick = (element, urlSet) => {
  * @param {Set<string>} urlSet - The set to add found URLs to.
  */
 function extractUrlsFromScriptContent(scriptElement, urlSet) {
+  // Changed to function declaration for hoisting
   if (scriptElement.textContent) {
-    const scriptUrlRegex = /(https?:\/\/[^\s"',`{}()\[\]]+)/gi;
+    // More specific regex for URLs in script content
+    const scriptUrlRegex =
+      /(https?:\/\/[a-zA-Z0-9-.]+\.[a-zA-Z]{2,}(?:\/[^\s"',`{}()\[\]]*)?)/gi;
     let match;
     while ((match = scriptUrlRegex.exec(scriptElement.textContent)) !== null) {
       const urlString = match[1];
@@ -100,6 +107,7 @@ function extractUrlsFromScriptContent(scriptElement, urlSet) {
         if (DEBUG_MODE)
           console.log(`Content Script: Found URL from script content: ${url}`);
       } catch (e) {
+        // Invalid URL string in script content, ignore or log if debug
         if (DEBUG_MODE)
           console.error(
             "Content Script: Invalid URL in script content:",
@@ -122,9 +130,12 @@ function extractUrlsFromTextContent(
   urlSet,
   sourceDescription = "text content",
 ) {
+  // Changed to function declaration for hoisting
   if (!text) return;
+  // Refined regex to be more specific for actual URLs and reduce false positives.
+  // Looks for http/https, www, or common domain patterns. Avoids matching things like '33.333%;'
   const generalUrlRegex =
-    /(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/[a-zA-Z0-9]+\.[^\s]{2,}|[a-zA-Z0-9]+\.[^\s]{2,})/gi;
+    /(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s"']{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s"']{2,}|https?:\/\/[a-zA-Z0-9]+\.[^\s"']{2,})/gi;
   let match;
   while ((match = generalUrlRegex.exec(text)) !== null) {
     const urlString = match[0];
@@ -136,6 +147,7 @@ function extractUrlsFromTextContent(
           `Content Script: Found URL from ${sourceDescription}: ${url}`,
         );
     } catch (e) {
+      // Invalid URL string in text content, ignore or log if debug
       if (DEBUG_MODE)
         console.error(
           `Content Script: Invalid URL in ${sourceDescription}:`,
@@ -154,7 +166,7 @@ function extractUrlsFromTextContent(
 function extractUrlsFromNode(node) {
   const foundUrls = new Set();
 
-  // Helper function to process elements with a given selector and attribute
+  // Helper function to process elements with a given selector and attribute (for subtree queries)
   const processElements = (selector, attribute, rootNode = node) => {
     if (
       rootNode.nodeType !== Node.ELEMENT_NODE &&
@@ -186,8 +198,8 @@ function extractUrlsFromNode(node) {
 
   // If the node itself is an element, check its attributes and text content
   if (node.nodeType === Node.ELEMENT_NODE) {
-    // Check the node itself for direct attributes
-    const attributesToCheck = [
+    // Check the node itself for direct attributes (fixed to avoid empty selector)
+    const attributesToCheckDirectly = [
       "href",
       "src",
       "action",
@@ -195,7 +207,7 @@ function extractUrlsFromNode(node) {
       "poster",
       "data",
     ];
-    attributesToCheck.forEach((attr) => {
+    attributesToCheckDirectly.forEach((attr) => {
       if (node.hasAttribute(attr)) {
         const urlString = node.getAttribute(attr);
         if (urlString) {
@@ -225,7 +237,7 @@ function extractUrlsFromNode(node) {
       extractUrlsFromScriptContent(node, foundUrls);
 
     // Check data-* attributes on the node itself
-    const dataAttributes = [
+    const dataAttributesDirect = [
       "data-url",
       "data-href",
       "data-link",
@@ -245,7 +257,7 @@ function extractUrlsFromNode(node) {
       "data-redirect-url",
       "data-target-url",
     ];
-    dataAttributes.forEach((attr) => {
+    dataAttributesDirect.forEach((attr) => {
       if (node.hasAttribute(attr)) {
         const urlString = node.getAttribute(attr);
         if (urlString) {
@@ -353,6 +365,7 @@ function extractUrlsFromNode(node) {
     .forEach((element) => extractUrlsFromOnclick(element, foundUrls));
 
   // 6. Apply general text content scanning to all descendant text nodes
+  // This is the most aggressive scan, and can be CPU intensive.
   node.querySelectorAll("*").forEach((element) => {
     element.childNodes.forEach((child) => {
       if (
@@ -383,10 +396,22 @@ function debouncedSendUrls() {
         console.log(
           `Content Script: Debounced sending ${urlsArray.length} URLs to background.`,
         );
-      chrome.runtime.sendMessage({
-        action: "foundUrlsFromContent",
-        urls: urlsArray,
-      });
+      // Check if chrome.runtime is available before sending message
+      if (
+        typeof chrome !== "undefined" &&
+        chrome.runtime &&
+        chrome.runtime.sendMessage
+      ) {
+        chrome.runtime.sendMessage({
+          action: "foundUrlsFromContent",
+          urls: urlsArray,
+        });
+      } else {
+        if (DEBUG_MODE)
+          console.warn(
+            "Content Script: chrome.runtime.sendMessage not available. Message not sent.",
+          );
+      }
       urlsToProcess.clear(); // Clear the set after sending
     }
   }, DEBOUNCE_DELAY);
