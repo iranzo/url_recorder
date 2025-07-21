@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Domain URL Recorder",
-  "version": "1.8.5",
+  "version": "1.8.7",
   "description": "Records all URLs visited and found within HTML content based on specified patterns, including dynamically loaded content.",
-  "permissions": ["activeTab", "storage", "webNavigation"],
+  "permissions": ["storage", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"

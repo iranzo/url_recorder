@@ -6,11 +6,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const setPatternsButton = document.getElementById("setPatternsButton");
   const clearUrlsButton = document.getElementById("clearUrlsButton");
   const downloadUrlsButton = document.getElementById("downloadUrlsButton");
+  const copyUrlsButton = document.getElementById("copyUrlsButton"); // New button element
   const urlList = document.getElementById("urlList");
   const currentPatternsDisplay = document.getElementById(
     "currentPatternsDisplay",
   );
-  const totalUrlsCount = document.getElementById("totalUrlsCount"); // New element
+  const totalUrlsCount = document.getElementById("totalUrlsCount");
   const messageBox = document.getElementById("messageBox");
   const debugModeToggle = document.getElementById("debugModeToggle");
 
@@ -225,6 +226,50 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         showMessage("Failed to retrieve URLs for download.", "error");
         // console.error('Failed to retrieve URLs from background script for download.'); // Debug log
+      }
+    });
+  });
+
+  // Event listener for copying all recorded URLs to clipboard
+  copyUrlsButton.addEventListener("click", () => {
+    chrome.runtime.sendMessage({ action: "getRecordedUrls" }, (response) => {
+      if (response && response.urls) {
+        const urlsToCopy = response.urls;
+        if (urlsToCopy.length === 0) {
+          showMessage("No URLs to copy.", "info");
+          return;
+        }
+
+        try {
+          const textToCopy = urlsToCopy.join("\n");
+          // Create a temporary textarea element to hold the text
+          const tempTextArea = document.createElement("textarea");
+          tempTextArea.value = textToCopy;
+          tempTextArea.style.position = "fixed"; // Keep it off-screen
+          tempTextArea.style.left = "-9999px";
+          tempTextArea.style.top = "-9999px";
+          document.body.appendChild(tempTextArea);
+          tempTextArea.focus();
+          tempTextArea.select(); // Select the text
+
+          // Execute the copy command
+          const success = document.execCommand("copy");
+          document.body.removeChild(tempTextArea); // Clean up
+
+          if (success) {
+            showMessage(
+              `Copied ${urlsToCopy.length} URLs to clipboard.`,
+              "success",
+            );
+          } else {
+            showMessage("Failed to copy URLs to clipboard.", "error");
+          }
+        } catch (e) {
+          console.error("Error during copy to clipboard process:", e);
+          showMessage("An error occurred during copy to clipboard.", "error");
+        }
+      } else {
+        showMessage("Failed to retrieve URLs for copy to clipboard.", "error");
       }
     });
   });
