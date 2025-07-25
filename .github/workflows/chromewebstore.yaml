@@ -1,0 +1,56 @@
+---
+name: Publish Chrome Extension to Web Store
+
+on:
+  release:
+    # Trigger the workflow when a new release is published
+    types: [published]
+
+jobs:
+  build_and_publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20" # Or your preferred Node.js version
+
+      # If you have a build step (e.g., for bundling Tailwind CSS, or minifying JS)
+      # - name: Install dependencies (if any)
+      #   run: npm install
+      # - name: Build extension (if needed, e.g., for local Tailwind CSS)
+      #   run: npm run build
+
+      - name: Update Manifest Version
+        run: |
+          # Extract version from the Git tag (e.g., v1.2.3 -> 1.2.3 or 1.2.3 -> 1.2.3)
+          # GITHUB_REF is typically "refs/tags/1.2.3" or "refs/tags/v1.2.3"
+          RELEASE_VERSION=$(echo "${{ github.ref }}" | sed 's/refs\/tags\///' | sed 's/^v//')
+          echo "Detected release version: $RELEASE_VERSION"
+
+          # Update the version in manifest.json using jq
+          # jq is a lightweight and flexible command-line JSON processor
+          jq ".version = \"$RELEASE_VERSION\"" manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
+          echo "Updated manifest.json to version: $RELEASE_VERSION"
+
+      - name: Create extension package (ZIP file)
+        run: |
+          # Ensure the manifest.json is at the root of the zip file.
+          # This command zips all necessary files directly from the current directory.
+          zip -r extension.zip . -x "*.git*" "node_modules/*" "README.md" ".github/*"
+
+      - name: Upload and Publish to Chrome Web Store
+        uses: mobilefirstllc/cws-publish@latest
+        with:
+          # Action: 'upload' uploads to draft, 'publish' uploads and submits for review.
+          # 'publish' is generally what you want for automated releases.
+          action: publish
+          client_id: ${{ secrets.CLIENT_ID }}
+          client_secret: ${{ secrets.CLIENT_SECRET }}
+          refresh_token: ${{ secrets.REFRESH_TOKEN }}
+          extension_id: ${{ secrets.EXTENSION_ID }}
+          zip_file: extension.zip # Path to your created zip file
