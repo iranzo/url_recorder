@@ -1,6 +1,7 @@
 {
   "branches": ["master"],
   "repositoryUrl": "https://github.com/iranzo/url_recorder.git",
+  "tagFormat": "${version}",
   "plugins": [
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
