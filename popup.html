@@ -4,15 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Domain URL Recorder</title>
-    <!-- Tailwind CSS CDN removed due to Content Security Policy (CSP) restrictions -->
-    <!-- If you wish to use Tailwind, you'll need to bundle it locally. -->
     <style>
       /* Custom styles for the Inter font and overall popup appearance */
       body {
         font-family: "Inter", sans-serif;
-        width: 320px; /* Fixed width for the popup */
+        width: 320px;
         padding: 1rem;
-        background-color: #f7fafc; /* Light gray background */
+        background-color: #f7fafc;
       }
       .container {
         display: flex;
@@ -26,11 +24,10 @@
       }
       .btn {
         padding: 0.5rem 1rem;
-        border-radius: 0.5rem; /* Rounded corners for buttons */
+        border-radius: 0.5rem;
         cursor: pointer;
         font-weight: 600;
         transition: background-color 0.2s ease-in-out;
-        /* Fallback styles for buttons if Tailwind is not used */
         background-color: #4c51bf;
         color: white;
         border: none;
@@ -39,53 +36,58 @@
         background-color: #5a67d8;
       }
       .btn-primary {
-        background-color: #4c51bf; /* Indigo */
+        background-color: #4c51bf;
         color: white;
         border: none;
       }
       .btn-primary:hover {
-        background-color: #5a67d8; /* Darker indigo on hover */
+        background-color: #5a67d8;
       }
       .btn-danger {
-        background-color: #e53e3e; /* Red */
+        background-color: #e53e3e;
         color: white;
         border: none;
       }
       .btn-danger:hover {
-        background-color: #ef4444; /* Darker red on hover */
+        background-color: #ef4444;
       }
       .btn-secondary {
-        background-color: #6b7280; /* Gray */
+        background-color: #6b7280;
         color: white;
         border: none;
       }
       .btn-secondary:hover {
-        background-color: #4b5563; /* Darker gray on hover */
+        background-color: #4b5563;
       }
       .url-list {
-        max-height: 200px; /* Max height for scrollable URL list */
-        overflow-y: auto; /* Enable vertical scrolling */
-        border: 1px solid #e2e8f0; /* Light border */
+        max-height: 200px;
+        overflow-y: auto;
+        border: 1px solid #e2e8f0;
         border-radius: 0.5rem;
         padding: 0.5rem;
         background-color: white;
       }
       .url-list li {
         padding: 0.25rem 0;
-        border-bottom: 1px dashed #edf2f7; /* Dashed separator */
-        word-break: break-all; /* Break long URLs */
+        border-bottom: 1px dashed #edf2f7;
+        word-break: break-all;
       }
       .url-list li:last-child {
-        border-bottom: none; /* No border on the last item */
+        border-bottom: none;
       }
       .message-box {
-        background-color: #fff3cd; /* Light yellow for warnings */
+        background-color: #fff3cd;
         color: #664d03;
         border: 1px solid #ffecb5;
         border-radius: 0.5rem;
         padding: 0.75rem;
         margin-top: 1rem;
-        display: none; /* Hidden by default */
+        display: none;
+      }
+      .flex-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
       }
       .debug-switch {
         display: flex;
@@ -93,17 +95,15 @@
         gap: 0.5rem;
         margin-top: 0.5rem;
       }
-      /* Basic styling for input and textarea to compensate for Tailwind removal */
       input[type="text"],
       textarea {
         padding: 0.5rem;
-        border: 1px solid #d1d5db; /* gray-300 */
-        border-radius: 0.25rem; /* rounded-md */
+        border: 1px solid #d1d5db;
+        border-radius: 0.25rem;
         width: 100%;
-        box-sizing: border-box; /* Include padding and border in the element's total width and height */
+        box-sizing: border-box;
       }
       input[type="checkbox"] {
-        /* Basic checkbox styling */
         width: 1.25rem;
         height: 1.25rem;
         border-radius: 0.25rem;
@@ -115,7 +115,7 @@
         vertical-align: middle;
       }
       input[type="checkbox"]:checked {
-        background-color: #4c51bf; /* indigo-700 */
+        background-color: #4c51bf;
         border-color: #4c51bf;
       }
       input[type="checkbox"]:checked::after {
@@ -152,49 +152,71 @@
         </button>
       </div>
 
-      <div class="text-sm text-gray-600">
-        Currently monitoring patterns:
-        <span id="currentPatternsDisplay" class="font-semibold text-indigo-600"
-          >None</span
+      <div class="flex-row items-center gap-2 mt-4">
+        <input type="checkbox" id="simplifyUrlsToggle" class="form-checkbox" />
+        <label
+          for="simplifyUrlsToggle"
+          class="text-sm font-medium text-gray-700 flex-grow"
+          >Simplify URLs (ignore parameters)</label
         >
       </div>
-
-      <div class="text-sm text-gray-600">
-        Total URLs stored:
-        <span id="totalUrlsCount" class="font-semibold text-indigo-600">0</span>
+      <div class="input-group mt-2">
+        <label
+          for="ignoredParamsInput"
+          class="text-sm font-medium text-gray-700"
+        >
+          URL Parameters to Ignore (comma-separated, e.g.,
+          `ref,src,utm_source`):
+        </label>
+        <input
+          type="text"
+          id="ignoredParamsInput"
+          placeholder="Enter parameter keys"
+          class="p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 shadow-sm"
+        />
       </div>
 
-      <div class="flex flex-col sm:flex-row gap-2 mt-2">
+      <div class="flex-row items-center justify-between mt-4">
+        <div class="text-sm text-gray-600">
+          Currently monitoring:
+          <span
+            id="currentPatternsDisplay"
+            class="font-semibold text-indigo-600"
+            >None</span
+          >
+        </div>
+        <div class="text-sm text-gray-600">
+          URLs stored:
+          <span id="totalUrlsCount" class="font-semibold text-indigo-600"
+            >0</span
+          >
+        </div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row gap-2 mt-4">
         <button id="downloadUrlsButton" class="btn btn-secondary flex-grow">
-          Download All Recorded URLs
+          Download All
         </button>
         <button id="copyUrlsButton" class="btn btn-secondary flex-grow">
-          Copy All URLs to Clipboard
+          Copy All to Clipboard
         </button>
         <button id="clearUrlsButton" class="btn btn-danger flex-grow">
-          Clear All Recorded URLs
+          Clear All
         </button>
       </div>
 
-      <div class="debug-switch">
-        <input
-          type="checkbox"
-          id="debugModeToggle"
-          class="form-checkbox h-5 w-5 text-indigo-600 rounded-md"
-        />
+      <div class="debug-switch mt-2">
+        <input type="checkbox" id="debugModeToggle" class="form-checkbox" />
         <label for="debugModeToggle" class="text-sm font-medium text-gray-700"
-          >Enable Debugging (console logs)</label
+          >Enable Debugging</label
         >
       </div>
 
       <div class="message-box" id="messageBox"></div>
 
-      <h2 class="text-lg font-semibold text-indigo-700 mt-4">
-        Recorded URLs (matching current patterns):
-      </h2>
+      <h2 class="text-lg font-semibold text-indigo-700 mt-4">Recorded URLs:</h2>
       <ul id="urlList" class="url-list">
-        <!-- URLs will be dynamically loaded here -->
-        <li class="text-gray-500">No URLs recorded yet for these patterns.</li>
+        <li class="text-gray-500">No URLs recorded yet.</li>
       </ul>
     </div>
 

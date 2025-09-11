@@ -4,6 +4,8 @@
 let DEBUG_MODE = false; // Global flag for debugging
 let cachedRecordedUrls = []; // Global in-memory cache for recorded URLs
 let cachedTargetPatterns = []; // Global in-memory cache for target patterns
+let isUrlSimplificationEnabled = false; // New flag for URL simplification
+let ignoredUrlParams = []; // New array for parameters to ignore
 
 /**
  * Initializes the in-memory caches from chrome.storage.local.
@@ -14,33 +16,38 @@ async function initializeCaches() {
     "targetPatterns",
     "recordedUrls",
     "isDebugMode",
+    "isUrlSimplificationEnabled",
+    "ignoredUrlParams",
   ]);
 
-  // Initialize targetPatterns
+  // Initialize caches
   cachedTargetPatterns = result.targetPatterns || [];
-  if (DEBUG_MODE)
+  cachedRecordedUrls = result.recordedUrls || [];
+  DEBUG_MODE = result.isDebugMode || false;
+  isUrlSimplificationEnabled = result.isUrlSimplificationEnabled || false;
+  ignoredUrlParams = result.ignoredUrlParams || [];
+
+  if (DEBUG_MODE) {
     console.log(
-      "Background: Loaded initial cachedTargetPatterns from storage:",
+      "Background: Loaded initial cachedTargetPatterns:",
       cachedTargetPatterns,
     );
-
-  // Initialize recordedUrls
-  cachedRecordedUrls = result.recordedUrls || [];
-  if (DEBUG_MODE)
     console.log(
-      "Background: Loaded initial cachedRecordedUrls from storage:",
+      "Background: Loaded initial cachedRecordedUrls:",
       cachedRecordedUrls,
     );
-
-  // Initialize debugMode
-  DEBUG_MODE = result.isDebugMode || false; // Default to false
-  if (DEBUG_MODE)
+    console.log("Background: Loaded initial DEBUG_MODE:", DEBUG_MODE);
     console.log(
-      "Background: Loaded initial DEBUG_MODE from storage:",
-      DEBUG_MODE,
+      "Background: Loaded initial isUrlSimplificationEnabled:",
+      isUrlSimplificationEnabled,
     );
+    console.log(
+      "Background: Loaded initial ignoredUrlParams:",
+      ignoredUrlParams,
+    );
+  }
 
-  updateBadgeCount(); // Update badge after caches are loaded
+  updateBadgeCount();
 }
 
 // Call initializeCaches immediately when the service worker script starts
@@ -50,31 +57,29 @@ initializeCaches();
 // It ensures default values are set if storage is completely empty (first install).
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get(
-    ["targetPatterns", "recordedUrls", "isDebugMode"],
+    [
+      "targetPatterns",
+      "recordedUrls",
+      "isDebugMode",
+      "isUrlSimplificationEnabled",
+      "ignoredUrlParams",
+    ],
     (result) => {
       if (result.targetPatterns === undefined) {
         chrome.storage.local.set({ targetPatterns: [] });
-        if (DEBUG_MODE)
-          console.log(
-            "Background: onInstalled: Initialized targetPatterns to empty array in storage.",
-          );
       }
       if (result.recordedUrls === undefined) {
         chrome.storage.local.set({ recordedUrls: [] });
-        if (DEBUG_MODE)
-          console.log(
-            "Background: onInstalled: Initialized recordedUrls to empty array in storage.",
-          );
       }
       if (result.isDebugMode === undefined) {
-        chrome.storage.local.set({ isDebugMode: false }); // Default to false
-        if (DEBUG_MODE)
-          console.log(
-            "Background: onInstalled: Initialized isDebugMode to false in storage.",
-          );
+        chrome.storage.local.set({ isDebugMode: false });
       }
-      // Caches are already initialized by the direct call to initializeCaches()
-      // and will be kept in sync by storage.onChanged.
+      if (result.isUrlSimplificationEnabled === undefined) {
+        chrome.storage.local.set({ isUrlSimplificationEnabled: false });
+      }
+      if (result.ignoredUrlParams === undefined) {
+        chrome.storage.local.set({ ignoredUrlParams: [] });
+      }
     },
   );
 });
@@ -84,7 +89,7 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
   if (namespace === "local") {
     if (changes.isDebugMode !== undefined) {
       DEBUG_MODE = changes.isDebugMode.newValue;
-      console.log(`Background: DEBUG_MODE updated to: ${DEBUG_MODE}`); // This log always shows
+      console.log(`Background: DEBUG_MODE updated to: ${DEBUG_MODE}`);
     }
     if (changes.recordedUrls !== undefined) {
       cachedRecordedUrls = changes.recordedUrls.newValue || [];
@@ -92,13 +97,27 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
         console.log(
           `Background: cachedRecordedUrls updated via storage.onChanged. New count: ${cachedRecordedUrls.length}`,
         );
-      updateBadgeCount(); // Update badge when recordedUrls change from any source
+      updateBadgeCount();
     }
     if (changes.targetPatterns !== undefined) {
       cachedTargetPatterns = changes.targetPatterns.newValue || [];
       if (DEBUG_MODE)
         console.log(
           `Background: cachedTargetPatterns updated via storage.onChanged. New count: ${cachedTargetPatterns.length}`,
+        );
+    }
+    if (changes.isUrlSimplificationEnabled !== undefined) {
+      isUrlSimplificationEnabled = changes.isUrlSimplificationEnabled.newValue;
+      if (DEBUG_MODE)
+        console.log(
+          `Background: isUrlSimplificationEnabled updated to: ${isUrlSimplificationEnabled}`,
+        );
+    }
+    if (changes.ignoredUrlParams !== undefined) {
+      ignoredUrlParams = changes.ignoredUrlParams.newValue || [];
+      if (DEBUG_MODE)
+        console.log(
+          `Background: ignoredUrlParams updated. New count: ${ignoredUrlParams.length}`,
         );
     }
   }
@@ -108,12 +127,56 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
  * Updates the extension badge with the current count of recorded URLs.
  */
 function updateBadgeCount() {
-  // Use the in-memory cache for the count
   const count = cachedRecordedUrls.length;
   chrome.action.setBadgeText({ text: count.toString() });
-  chrome.action.setBadgeBackgroundColor({ color: "#4c51bf" }); // Indigo color
+  chrome.action.setBadgeBackgroundColor({ color: "#4c51bf" });
   if (DEBUG_MODE)
     console.log(`Background: Attempted to set badge count to: ${count}`);
+}
+
+/**
+ * Normalizes a URL by removing specific query parameters.
+ * @param {string} url - The original URL string.
+ * @param {string[]} paramsToIgnore - An array of query parameter keys to remove.
+ * @returns {string} The normalized URL.
+ */
+function normalizeUrl(url, paramsToIgnore) {
+  if (!paramsToIgnore || paramsToIgnore.length === 0) {
+    return url;
+  }
+  try {
+    const urlObj = new URL(url);
+    const params = new URLSearchParams(urlObj.search);
+    for (const param of paramsToIgnore) {
+      if (params.has(param)) {
+        params.delete(param);
+      }
+    }
+    urlObj.search = params.toString();
+    return urlObj.toString();
+  } catch (e) {
+    if (DEBUG_MODE) console.error(`Failed to normalize URL: ${url}`, e);
+    return url;
+  }
+}
+
+/**
+ * Checks if a given URL or its simplified version is already in the cache.
+ * @param {string} url - The URL to check.
+ * @returns {boolean} True if the URL (or its simplified version) is already in the cache, false otherwise.
+ */
+function isUrlInCache(url) {
+  if (isUrlSimplificationEnabled) {
+    const normalizedUrl = normalizeUrl(url, ignoredUrlParams);
+    if (DEBUG_MODE)
+      console.log(`Background: Checking for normalized URL: ${normalizedUrl}`);
+    return cachedRecordedUrls.some((cachedUrl) => {
+      const cachedNormalized = normalizeUrl(cachedUrl, ignoredUrlParams);
+      return cachedNormalized === normalizedUrl;
+    });
+  } else {
+    return cachedRecordedUrls.includes(url);
+  }
 }
 
 /**
@@ -132,7 +195,7 @@ function matchesAnyPattern(url, patterns) {
   }
   for (const patternString of patterns) {
     try {
-      const regex = new RegExp(patternString, "i"); // Case-insensitive matching
+      const regex = new RegExp(patternString, "i");
       if (regex.test(url)) {
         if (DEBUG_MODE)
           console.log(
@@ -157,13 +220,11 @@ function matchesAnyPattern(url, patterns) {
 
 /**
  * Adds a URL to storage if it matches the target patterns and is not already present.
- * This function now operates on the global cachedRecordedUrls array.
  * @param {string} url - The URL to add.
  */
 function addUrlToStorage(url) {
-  // Use the in-memory cache directly
   const targetPatterns = cachedTargetPatterns;
-  let currentRecordedUrls = cachedRecordedUrls; // Reference to the global cache
+  let currentRecordedUrls = cachedRecordedUrls;
 
   if (DEBUG_MODE) {
     console.log(`addUrlToStorage: Checking URL: "${url}"`);
@@ -175,27 +236,19 @@ function addUrlToStorage(url) {
       console.log(
         `addUrlToStorage: Before deduplication check, cachedRecordedUrls has ${currentRecordedUrls.length} items.`,
       );
-    if (DEBUG_MODE)
-      console.log(
-        `addUrlToStorage: Is "${url}" already in cachedRecordedUrls? ${currentRecordedUrls.includes(
-          url,
-        )}`,
-      );
 
-    if (!currentRecordedUrls.includes(url)) {
-      currentRecordedUrls.push(url); // Add to the in-memory cache
+    if (!isUrlInCache(url)) {
+      currentRecordedUrls.push(url);
       chrome.storage.local.set({ recordedUrls: currentRecordedUrls }, () => {
-        // Save the updated cache to storage
         if (DEBUG_MODE)
           console.log(
             `addUrlToStorage: Successfully recorded URL: "${url}". New total URLs: ${currentRecordedUrls.length}`,
           );
-        // updateBadgeCount() is now called by storage.onChanged listener for recordedUrls
       });
     } else {
       if (DEBUG_MODE)
         console.log(
-          `addUrlToStorage: URL "${url}" is already recorded, skipping.`,
+          `addUrlToStorage: URL "${url}" is already recorded (or a simplified version of it), skipping.`,
         );
     }
   } else {
@@ -210,7 +263,6 @@ function addUrlToStorage(url) {
  * Listens for web navigation events and records the navigated URL.
  */
 chrome.webNavigation.onBeforeNavigate.addListener((details) => {
-  // Ensure the frame is the main frame (not an iframe) and it's a valid HTTP/HTTPS URL
   if (
     details.frameId === 0 &&
     (details.url.startsWith("http://") || details.url.startsWith("https://"))
@@ -225,10 +277,6 @@ chrome.webNavigation.onBeforeNavigate.addListener((details) => {
 
 /**
  * Handles messages from the popup script and content script.
- * - 'setTargetPatterns': Sets the array of patterns to monitor.
- * - 'getRecordedUrls': Sends back all recorded URLs and the current target patterns.
- * - 'clearRecordedUrls': Clears all recorded URLs.
- * - 'foundUrlsFromContent': Receives URLs extracted by the content script.
  */
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "setTargetPatterns") {
@@ -236,14 +284,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       ? request.patterns.filter((p) => typeof p === "string" && p.trim() !== "")
       : [];
     chrome.storage.local.set({ targetPatterns: newTargetPatterns }, () => {
-      // cachedTargetPatterns will be updated by storage.onChanged listener
       if (DEBUG_MODE)
         console.log(`Background: Set new target patterns:`, newTargetPatterns);
       sendResponse({ success: true, patterns: newTargetPatterns });
     });
     return true;
+  } else if (request.action === "setSimplificationSettings") {
+    chrome.storage.local.set(
+      {
+        isUrlSimplificationEnabled: request.isEnabled,
+        ignoredUrlParams: request.params,
+      },
+      () => {
+        if (DEBUG_MODE)
+          console.log(
+            `Background: Set URL simplification settings. Enabled: ${request.isEnabled}, Ignored Params:`,
+            request.params,
+          );
+        sendResponse({ success: true });
+      },
+    );
+    return true;
   } else if (request.action === "getRecordedUrls") {
-    // Respond with the cached data
     if (DEBUG_MODE)
       console.log(
         `Background: Sending recorded URLs (${cachedRecordedUrls.length}) and patterns (${cachedTargetPatterns.length}) to popup.`,
@@ -251,13 +313,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({
       urls: cachedRecordedUrls,
       targetPatterns: cachedTargetPatterns,
+      isUrlSimplificationEnabled: isUrlSimplificationEnabled,
+      ignoredUrlParams: ignoredUrlParams,
     });
     return true;
   } else if (request.action === "clearRecordedUrls") {
     chrome.storage.local.set({ recordedUrls: [] }, () => {
-      // cachedRecordedUrls will be updated by storage.onChanged listener
       if (DEBUG_MODE) console.log("Background: All recorded URLs cleared.");
-      // updateBadgeCount() is now called by storage.onChanged listener for recordedUrls
       sendResponse({ success: true });
     });
     return true;
